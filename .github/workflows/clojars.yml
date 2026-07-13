@@ -1,0 +1,32 @@
+name: clojars
+# Publishes io.github.hive-agi/hive-datalevin to Clojars on every push to main.
+# Idempotent: build.clj no-ops if the VERSION is already published.
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - '.github/**'
+  workflow_dispatch:
+
+jobs:
+  clojars:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: DeLaGuardo/setup-clojure@13.0
+        with:
+          cli: latest
+      - name: Cache ~/.m2
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2
+          key: m2-${{ hashFiles('deps.edn') }}
+          restore-keys: m2-
+      - name: Deploy to Clojars
+        env:
+          CLOJARS_USERNAME: ${{ secrets.CLOJARS_USERNAME }}
+          CLOJARS_PASSWORD: ${{ secrets.CLOJARS_DEPLOY_TOKEN }}
+        run: clojure -T:build deploy

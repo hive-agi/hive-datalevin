@@ -1,0 +1,15 @@
+/target
+/classes
+/checkouts
+.cpcache/
+.lsp/.cache/
+.clj-kondo/.cache/
+*.jar
+*.class
+.nrepl-port
+.rebel_readline_history
+pom.xml
+pom.xml.asc
+.lsp/
+*.elc
+target/
