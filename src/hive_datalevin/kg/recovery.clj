@@ -7,7 +7,7 @@
             [clojure.string :as str]
             [hive-dsl.result :refer [rescue]]
             [taoensso.timbre :as log]))
-;; SPDX-License-Identifier: AGPL-3.0-or-later
+;; SPDX-License-Identifier: MIT
 
 ;; -----------------------------------------------------------------------------
 ;; Classification — pure

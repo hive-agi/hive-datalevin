@@ -9,7 +9,7 @@
             [hive-dsl.result :refer [rescue]]
             [clojure.java.io :as io]
             [taoensso.timbre :as log]))
-;; SPDX-License-Identifier: AGPL-3.0-or-later
+;; SPDX-License-Identifier: MIT
 
 (def default-value-type-map
   "DataScript attribute -> Datalevin :db/valueType. The host may override or
