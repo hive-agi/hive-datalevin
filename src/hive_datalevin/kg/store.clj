@@ -74,37 +74,61 @@
       (.mkdirs (.getParentFile dir))))
   db-path)
 
+(defn- open-conn!
+  "Open (heal-and-open) the datalevin conn for `store`'s configuration.
+   Factored from ensure-conn! so liveness recovery can rebuild the conn
+   through the same recovery-policy path."
+  [{:keys [db-path base-schema extra-schema value-type-map
+           recovery-policy cache-limit]}]
+  (log/info "Initializing Datalevin KG store"
+            {:path db-path
+             :recovery-strategy (:strategy recovery-policy)})
+  (validate-db-path! db-path)
+  (let [vtm           (or value-type-map default-value-type-map)
+        base          (translate-schema (or base-schema {}) vtm)
+        merged-schema (if extra-schema
+                        (merge base (translate-schema extra-schema vtm))
+                        base)
+        conn-opts     (cond-> {}
+                        (some? cache-limit) (assoc :cache-limit cache-limit))]
+    (log/debug "Datalevin schema translated"
+               {:attributes (count merged-schema)
+                :extra-attributes (when extra-schema (count extra-schema))
+                :cache-limit cache-limit})
+    (rec/heal-and-open!
+     {:policy recovery-policy :db-path db-path}
+     #(dtlv/get-conn db-path merged-schema conn-opts))))
+
 (defrecord DatalevinStore [conn-init db-path base-schema extra-schema
                            value-type-map recovery-policy cache-limit]
   kg/IKGStore
 
-  (ensure-conn! [_this]
+  (ensure-conn! [this]
     ;; Single-init via IConnInit: concurrent callers block on the first open
-    ;; and observe the cached conn, avoiding the LMDB file-lock race.
-    (ci/open-once!
-     conn-init
-     (fn []
-       (log/info "Initializing Datalevin KG store"
-                 {:path db-path
-                  :recovery-strategy (:strategy recovery-policy)})
-       (validate-db-path! db-path)
-       (let [vtm           (or value-type-map default-value-type-map)
-             base          (translate-schema (or base-schema {}) vtm)
-             merged-schema (if extra-schema
-                             (merge base (translate-schema extra-schema vtm))
-                             base)
-             conn-opts     (cond-> {}
-                             (some? cache-limit) (assoc :cache-limit cache-limit))]
-         (log/debug "Datalevin schema translated"
-                    {:attributes (count merged-schema)
-                     :extra-attributes (when extra-schema (count extra-schema))
-                     :cache-limit cache-limit})
-         (rec/heal-and-open!
-          {:policy recovery-policy :db-path db-path}
-          #(dtlv/get-conn db-path merged-schema conn-opts))))))
+    ;; and observe the cached conn, avoiding the LMDB file-lock race. A cached
+    ;; conn that reports closed (closed behind the store's back) is discarded
+    ;; and reopened — a dead conn is never returned.
+    (let [conn (ci/open-once! conn-init #(open-conn! this))]
+      (if (and conn (rescue false (dtlv/closed? conn)))
+        (do (log/warn "Datalevin conn found closed — reopening"
+                      {:path db-path})
+            (ci/clear! conn-init)
+            (ci/open-once! conn-init #(open-conn! this)))
+        conn)))
 
   (transact! [this tx-data]
-    (dtlv/transact! (kg/ensure-conn! this) tx-data))
+    ;; Heal-once on a dead conn (closed env / closed channel), then retry.
+    ;; Any other failure — schema, corruption, domain — surfaces unchanged.
+    (let [conn (kg/ensure-conn! this)]
+      (try
+        (dtlv/transact! conn tx-data)
+        (catch Throwable e
+          (if (or (rescue false (dtlv/closed? conn))
+                  (rec/dead-conn-throwable? e))
+            (do (log/warn "Datalevin transact! hit a dead conn — healing and retrying once"
+                          {:path db-path :error (ex-message e)})
+                (dtlv/transact! (kg/reset-conn! this) tx-data))
+            (throw e))))))
 
   (query [this q]
     (dtlv/q q (dtlv/db (kg/ensure-conn! this))))

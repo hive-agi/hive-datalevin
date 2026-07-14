@@ -2,4 +2,4 @@
  :parent "hive"
  :description "Datalevin (LMDB) implementation of hive-spi.kg.protocol/IKGStore — a loadable KG storage backend. Schema, value-type map, and config are injected by the host; carries no hive-mcp dependency."
  :language :clojure
- :tags ["kg" "datalevin" "lmdb" "storage-backend" "spi-impl" "devinculation"]}
+ :tags ["kg" "datalevin" "lmdb" "storage-backend" "spi-impl" "devinculation"] :carto {:source-roots ["src" "test"]}}
