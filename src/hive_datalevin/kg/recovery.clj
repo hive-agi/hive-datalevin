@@ -61,6 +61,31 @@
         (and t (.getCause t))                  (recur (.getCause t))
         :else                                  :unknown))))
 
+(def ^:private dead-conn-signatures
+  "Substrings indicating a CLOSED (not corrupt) conn/env: the store's cached
+   conn died behind its back. Distinct from `corrupt-signatures` — a dead conn
+   heals by reopening, never by truncate/quarantine."
+  ["ClosedChannelException"
+   "(conn? conn)"
+   "Database is closed"
+   "env is closed"
+   "closed"])
+
+(defn dead-conn-throwable?
+  "True when `ex` indicates the operation ran against a closed conn/env —
+   ClosedChannelException anywhere in the cause chain, datalevin's `(conn?
+   conn)` assertion, or a 'closed' storage message. Corruption and domain
+   errors return false; they must surface, not heal."
+  [^Throwable ex]
+  (boolean
+   (when ex
+     (loop [t ex]
+       (cond
+         (nil? t) false
+         (instance? java.nio.channels.ClosedChannelException t) true
+         (match-any? (some-> t .getMessage str) dead-conn-signatures) true
+         :else (recur (.getCause t)))))))
+
 ;; -----------------------------------------------------------------------------
 ;; Quarantine — IO
 ;; -----------------------------------------------------------------------------
