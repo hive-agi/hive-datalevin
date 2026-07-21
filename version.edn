@@ -2,4 +2,4 @@
  :minor    1
  :license  {:name "MIT" :url "https://opensource.org/licenses/MIT"}
  :scm-url  "https://github.com/hive-agi/hive-datalevin"
- :src-dirs ["src"]}
+ :src-dirs ["src"] :publish  :clojars}
