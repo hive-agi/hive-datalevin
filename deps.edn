@@ -21,7 +21,7 @@
          :main-opts ["-m" "cognitect.test-runner"]
          :exec-fn cognitect.test-runner.api/test}
 
-  ;; Clojars publishing. version = the repo's VERSION file (see build.clj).
+  ;; Clojars publishing. version = the repo's VERSION file.
   :build
   {:deps {io.github.hive-agi/hive-build {:mvn/version "0.1.0"}}
    :ns-default hive-build.api}}}
