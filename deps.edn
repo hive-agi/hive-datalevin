@@ -2,7 +2,7 @@
  :deps {org.clojure/clojure {:mvn/version "1.12.5"}
 
         ;; datalevin — LMDB-backed Datalog store (published, no fork).
-        datalevin/datalevin {:mvn/version "0.10.18"}
+        datalevin/datalevin {:mvn/version "1.0.2"}
 
         ;; hive-spi — IKGStore / IConnInit protocol contracts (pure leaf).
         io.github.hive-agi/hive-spi {:mvn/version "0.1.20"}
