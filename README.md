@@ -1,5 +1,14 @@
 # hive-datalevin
 
+<!-- hive-badges -->
+
+[![Clojars Project](https://img.shields.io/clojars/v/io.github.hive-agi/hive-datalevin.svg)](https://clojars.org/io.github.hive-agi/hive-datalevin)
+[![cljdoc](https://cljdoc.org/badge/io.github.hive-agi/hive-datalevin)](https://cljdoc.org/d/io.github.hive-agi/hive-datalevin/CURRENT)
+[![release](https://github.com/hive-agi/hive-datalevin/actions/workflows/release.yml/badge.svg)](https://github.com/hive-agi/hive-datalevin/actions/workflows/release.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+
+<!-- /hive-badges -->
+
 Datalevin (LMDB) implementation of the hive KG storage SPI.
 
 `src/hive_datalevin/kg/store.clj` implements
