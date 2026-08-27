@@ -5,10 +5,10 @@
         datalevin/datalevin {:mvn/version "1.0.2"}
 
         ;; hive-spi — IKGStore / IConnInit protocol contracts (pure leaf).
-        io.github.hive-agi/hive-spi {:mvn/version "0.1.20"}
+        io.github.hive-agi/hive-spi {:mvn/version "0.2.0"}
 
         ;; hive-dsl — Result/rescue DSL.
-        io.github.hive-agi/hive-dsl {:mvn/version "0.5.16"}
+        io.github.hive-agi/hive-dsl {:mvn/version "0.5.17"}
 
         com.taoensso/timbre {:mvn/version "6.8.0"}}
 
@@ -17,7 +17,7 @@
          :extra-deps  {io.github.cognitect-labs/test-runner
                        {:git/tag "v0.5.1" :git/sha "dfb30dd"}
                        ;; stateful Machine check for the conn-lifecycle contract
-                       io.github.hive-agi/hive-test {:mvn/version "0.3.14"}}
+                       io.github.hive-agi/hive-test {:mvn/version "0.3.15"}}
          :main-opts ["-m" "cognitect.test-runner"]
          :exec-fn cognitect.test-runner.api/test}
 
