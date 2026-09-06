@@ -77,9 +77,14 @@
 (defn- open-conn!
   "Open (heal-and-open) the datalevin conn for `store`'s configuration.
    Factored from ensure-conn! so liveness recovery can rebuild the conn
-   through the same recovery-policy path."
+   through the same recovery-policy path.
+
+   `conn-opts` is forwarded verbatim to `datalevin.core/get-conn` after the
+   host-level keys (`:cache-limit`), so a caller can set any datalevin db
+   option (`:background-sampling?`, `:kv-opts`, ...) without this namespace
+   naming each one."
   [{:keys [db-path base-schema extra-schema value-type-map
-           recovery-policy cache-limit]}]
+           recovery-policy cache-limit conn-opts]}]
   (log/info "Initializing Datalevin KG store"
             {:path db-path
              :recovery-strategy (:strategy recovery-policy)})
@@ -89,18 +94,20 @@
         merged-schema (if extra-schema
                         (merge base (translate-schema extra-schema vtm))
                         base)
-        conn-opts     (cond-> {}
+        conn-opts*    (cond-> (or conn-opts {})
                         (some? cache-limit) (assoc :cache-limit cache-limit))]
     (log/debug "Datalevin schema translated"
                {:attributes (count merged-schema)
                 :extra-attributes (when extra-schema (count extra-schema))
-                :cache-limit cache-limit})
+                :cache-limit cache-limit
+                :conn-opts conn-opts*})
     (rec/heal-and-open!
      {:policy recovery-policy :db-path db-path}
-     #(dtlv/get-conn db-path merged-schema conn-opts))))
+     #(dtlv/get-conn db-path merged-schema conn-opts*))))
 
 (defrecord DatalevinStore [conn-init db-path base-schema extra-schema
-                           value-type-map recovery-policy cache-limit]
+                           value-type-map recovery-policy cache-limit
+                           conn-opts]
   kg/IKGStore
 
   (ensure-conn! [this]
@@ -203,6 +210,9 @@
                       `default-value-type-map`)
      :cache-limit     bounds the Datalog index-cache LRU forwarded to get-conn;
                       nil leaves upstream behaviour untouched
+     :conn-opts       map forwarded verbatim to `datalevin.core/get-conn`
+                      (e.g. {:background-sampling? false}); :cache-limit
+                      above is layered on top of it
      :recovery-policy forwarded to `recovery/heal-and-open!`
                       {:strategy :throw|:audit|:truncate|:quarantine|[..]
                        :max-attempts pos-int}
@@ -210,13 +220,20 @@
    Config/schema resolution is the host's responsibility — this fn does not read
    env or config.edn. Returns nil on construction failure (rescue-wrapped)."
   [& [{:keys [db-path base-schema extra-schema value-type-map
-              recovery-policy cache-limit]}]]
+              recovery-policy cache-limit conn-opts]}]]
   (rescue nil
           (do
             (log/info "Creating Datalevin graph store"
                       {:path db-path
                        :extra-schema? (some? extra-schema)
                        :cache-limit cache-limit
+                       :conn-opts conn-opts
                        :recovery-strategy (:strategy recovery-policy)})
-            (->DatalevinStore (ci/atom-conn-init) db-path base-schema extra-schema
-                              value-type-map recovery-policy cache-limit))))
+            (map->DatalevinStore {:conn-init       (ci/atom-conn-init)
+                                  :db-path         db-path
+                                  :base-schema     base-schema
+                                  :extra-schema    extra-schema
+                                  :value-type-map  value-type-map
+                                  :recovery-policy recovery-policy
+                                  :cache-limit     cache-limit
+                                  :conn-opts       conn-opts}))))
