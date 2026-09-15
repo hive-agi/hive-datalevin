@@ -311,9 +311,24 @@
 ;; Public composition
 ;; -----------------------------------------------------------------------------
 
+(defn retryable-classification?
+  "True when an open failure of `classification` may be re-attempted. An
+   `:unknown` failure never is, whatever the policy answers."
+  [classification]
+  (not= :unknown classification))
+
+(defn- retry-outcome
+  "Final retry decision: the strategy's `outcome`, forced to `:abort` when
+   `classification` is not retryable."
+  [outcome classification]
+  (if (and (= :retry outcome) (retryable-classification? classification))
+    :retry
+    :abort))
+
 (defn heal-and-open!
   "Attempt `(open-fn)`. On failure, classify, apply policy, retry up to
-   `:max-attempts` total attempts. Returns the conn value or rethrows the last
+   `:max-attempts` total attempts. A failure classified `:unknown` is never
+   retried: the thrown ex-data carries `:retryable? false`. Returns the conn value or rethrows the last
    exception with `:classification` in its `ex-data`.
 
    `policy` — see `default-policy`:
@@ -343,11 +358,13 @@
               (log/warn ex "[storage/recovery] Open attempt"
                         attempt "of" max-attempts "failed"
                         {:db-path db-path :classification classification})
-              (case (apply-strategy strategy classification db-path ex)
+              (case (retry-outcome (apply-strategy strategy classification db-path ex)
+                                   classification)
                 :retry  (recur (inc attempt) ex)
                 :abort  (throw (ex-info "Datalevin open failed and policy aborted retry"
                                         {:db-path db-path
                                          :classification classification
                                          :strategy strategy
+                                         :retryable? (retryable-classification? classification)
                                          :err :storage/open-aborted}
                                         ex))))))))))

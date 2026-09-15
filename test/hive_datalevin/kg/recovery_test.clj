@@ -32,3 +32,31 @@
                                        boom)))))
   (testing "open-fn that succeeds returns its value"
     (is (= :conn (rec/heal-and-open! {:db-path "/tmp/none"} (fn [] :conn))))))
+
+(defn- counting-open-fn
+  "0-arg thunk that always throws `msg`, plus the atom counting its calls."
+  [msg]
+  (let [calls (atom 0)]
+    [(fn [] (swap! calls inc) (throw (Exception. ^String msg))) calls]))
+
+(deftest heal-and-open!-never-retries-unknown-test
+  (with-redefs [rec/apply-strategy (constantly :retry)]
+    (testing "an :unknown failure opens exactly once even when the policy says :retry"
+      (let [[open-fn calls] (counting-open-fn "DBI datalevin/eav is not open")
+            ex (try (rec/heal-and-open! {:policy {:max-attempts 3} :db-path "/tmp/none"}
+                                        open-fn)
+                    nil
+                    (catch clojure.lang.ExceptionInfo e e))]
+        (is (= 1 @calls))
+        (is (= {:classification :unknown :retryable? false :err :storage/open-aborted}
+               (select-keys (ex-data ex) [:classification :retryable? :err])))))
+    (testing "a classified failure still honours the policy's :retry"
+      (let [[open-fn calls] (counting-open-fn "Resource temporarily unavailable")]
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"exhausted"
+                              (rec/heal-and-open! {:policy {:max-attempts 3} :db-path "/tmp/none"}
+                                                  open-fn)))
+        (is (= 3 @calls))))))
+
+(deftest retryable-classification?-test
+  (is (false? (rec/retryable-classification? :unknown)))
+  (is (every? rec/retryable-classification? [:wal-corrupt :lock-contention :version-mismatch])))

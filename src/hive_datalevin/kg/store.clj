@@ -128,13 +128,18 @@
   (ensure-conn! [this]
     ;; Single-init via IConnInit: concurrent callers block on the first open
     ;; and observe the cached conn, avoiding the LMDB file-lock race. A cached
-    ;; conn that reports closed (closed behind the store's back) is discarded
-    ;; and reopened — a dead conn is never returned.
+    ;; conn that reports closed (closed behind the store's back) is released
+    ;; through close-conn! before it is dropped, then reopened; a dead conn is
+    ;; never returned. Release+drop happens only while the cached conn is still
+    ;; the stale one, so a racing caller never drops a freshly reopened conn.
     (let [conn (ci/open-once! conn-init #(open-conn! this))]
       (if (and conn (rescue false (dtlv/closed? conn)))
-        (do (log/warn "Datalevin conn found closed — reopening"
+        (do (log/warn "Datalevin conn found closed, releasing and reopening"
                       {:path db-path})
-            (ci/clear! conn-init)
+            (locking conn-init
+              (when (identical? conn (ci/snapshot conn-init))
+                (close-conn! conn)
+                (ci/clear! conn-init)))
             (ci/open-once! conn-init #(open-conn! this)))
         conn)))
 
