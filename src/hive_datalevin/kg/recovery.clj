@@ -292,20 +292,24 @@
           :abort))))
 
 (defn- apply-strategy
-  "Dispatch `strategy` (keyword or vec of keywords) to the per-failure handler.
-   Vector form walks entries left-to-right, returning `:retry` on the first
-   success; `:abort` if all abort."
+  "Dispatch `strategy` to the per-failure handler and return `:retry` or
+   `:abort`. `strategy` is a keyword, a vector of keywords walked
+   left-to-right (first `:retry` wins, `:abort` if all abort), or a
+   recovery-strategy FUNCTION `(f classification db-path ex)` for a host that
+   supplies its own policy."
   [strategy classification db-path ex]
-  (if (sequential? strategy)
-    (reduce
-     (fn [_ s]
-       (let [outcome (apply-single-strategy s classification db-path ex)]
-         (if (= :retry outcome)
-           (reduced :retry)
-           :abort)))
-     :abort
-     strategy)
-    (apply-single-strategy strategy classification db-path ex)))
+  (if (fn? strategy)
+    (strategy classification db-path ex)
+    (if (sequential? strategy)
+      (reduce
+       (fn [_ s]
+         (let [outcome (apply-single-strategy s classification db-path ex)]
+           (if (= :retry outcome)
+             (reduced :retry)
+             :abort)))
+       :abort
+       strategy)
+      (apply-single-strategy strategy classification db-path ex))))
 
 ;; -----------------------------------------------------------------------------
 ;; Public composition

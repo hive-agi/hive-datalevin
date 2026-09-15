@@ -70,17 +70,18 @@
     (try
       (kg/transact! s [{:kg-edge/id "e1" :kg-edge/from "a" :kg-edge/to "b"
                         :kg-edge/relation :calls :kg-edge/scope "t"}])
-      (let [stale      (ci/snapshot (:conn-init s))
-            released   (atom [])
-            real-close d/close]
+      (let [stale (ci/snapshot (:conn-init s))]
         ;; Close the LMDB store under the conn, bypassing d/close, so the stale
-        ;; conn keeps its registry, listener and read-cache state.
+        ;; conn keeps its db value, registry entry and listeners: the state the
+        ;; live host was in when the reopen aborted the JVM natively.
         (datalevin.interface/close (.-store ^datalevin.db.DB @stale))
-        (with-redefs [d/close (fn [c] (swap! released conj c) (real-close c))]
-          (testing "the read heals"
-            (is (= 1 (kg/query s '[:find (count ?e) . :where [?e :kg-edge/scope "t"]])))))
+        (is (some? @stale) "precondition: the stale conn still holds its db value")
+        (testing "the read heals"
+          (is (= 1 (kg/query s '[:find (count ?e) . :where [?e :kg-edge/scope "t"]]))))
         (testing "the stale conn went through datalevin's close before being dropped"
-          (is (some #(identical? stale %) @released)))
+          ;; d/close nils the conn's state once the store reports closed; a conn
+          ;; merely dereferenced keeps its db value and its LMDB env.
+          (is (nil? @stale)))
         (testing "the cached conn is a fresh one"
           (is (not (identical? stale (ci/snapshot (:conn-init s)))))))
       (finally (kg/close! s)))))
