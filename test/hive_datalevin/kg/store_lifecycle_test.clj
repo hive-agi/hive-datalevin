@@ -1,6 +1,8 @@
 (ns hive-datalevin.kg.store-lifecycle-test
   (:require [clojure.test :refer [deftest is testing]]
             [datalevin.core :as d]
+            [datalevin.db]
+            [datalevin.interface]
             [hive-datalevin.kg.recovery :as rec]
             [hive-datalevin.kg.store :as store]
             [hive-spi.kg.protocol :as kg]
@@ -71,6 +73,59 @@
         (is (thrown? Exception
                      (kg/transact! s [[:db/add "no such entity spec" :nope]]))))
       (finally (kg/close! s)))))
+
+;; ── global read-cache release ──────────────────────────────────────────────
+;; datalevin.db keeps one LRUCache per store dir in a process-global map that
+;; datalevin.core/close never clears; the store must release it on close.
+
+(defn- read-caches ^java.util.Map [] @#'datalevin.db/caches)
+
+(defn- conn-dir [s]
+  (datalevin.interface/dir (.-store ^datalevin.db.DB @(ci/snapshot (:conn-init s)))))
+
+(defn- seed! [s]
+  (kg/transact! s [{:kg-edge/id "e1" :kg-edge/from "a" :kg-edge/to "b"
+                    :kg-edge/relation :calls :kg-edge/scope "t"}])
+  (kg/query s '[:find (count ?e) . :where [?e :kg-edge/scope "t"]]))
+
+(deftest close!-releases-the-global-read-cache
+  (let [s   (mk-store (tmp-db-path))
+        _   (seed! s)
+        dir (conn-dir s)]
+    (is (.containsKey (read-caches) dir) "precondition: open store has a cache entry")
+    (kg/close! s)
+    (is (not (.containsKey (read-caches) dir)))))
+
+(deftest delete-database!-releases-the-global-read-cache
+  (let [s   (mk-store (tmp-db-path))
+        _   (seed! s)
+        dir (conn-dir s)]
+    (kg/delete-database! s :i-mean-it)
+    (is (not (.containsKey (read-caches) dir)))))
+
+(deftest reset-conn!-releases-the-old-cache-and-stays-usable
+  (let [s   (mk-store (tmp-db-path))
+        _   (seed! s)
+        dir (conn-dir s)
+        old (.get (read-caches) dir)]
+    (try
+      (kg/reset-conn! s)
+      (is (= 1 (kg/query s '[:find (count ?e) . :where [?e :kg-edge/scope "t"]])))
+      (is (not (identical? old (.get (read-caches) dir)))
+          "the pre-reset LRUCache is no longer referenced by the global map")
+      (finally (kg/close! s)))))
+
+(deftest close!-keeps-the-cache-of-a-store-still-shared-on-the-same-dir
+  (let [path (tmp-db-path)
+        s1   (mk-store path)
+        s2   (mk-store path)]
+    (try
+      (seed! s1)
+      (kg/ensure-conn! s2)
+      (kg/close! s1)
+      (testing "the surviving store on the same dir still reads"
+        (is (= 1 (kg/query s2 '[:find (count ?e) . :where [?e :kg-edge/scope "t"]]))))
+      (finally (kg/close! s1) (kg/close! s2)))))
 
 ;; ── lifecycle contract as a hive-test.stateful Machine ─────────────────────
 ;; Safety: no reachable state loses a committed write. Liveness: from every

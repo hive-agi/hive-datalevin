@@ -7,8 +7,11 @@
             [hive-spi.kg.conn-init :as ci]
             [hive-datalevin.kg.recovery :as rec]
             [hive-dsl.result :refer [rescue]]
+            [datalevin.db :as dtlv-db]
+            [datalevin.interface :as dtlv-i]
             [clojure.java.io :as io]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log])
+  (:import [datalevin.db DB]))
 ;; SPDX-License-Identifier: MIT
 
 (def default-value-type-map
@@ -105,6 +108,18 @@
      {:policy recovery-policy :db-path db-path}
      #(dtlv/get-conn db-path merged-schema conn-opts*))))
 
+(defn- close-conn!
+  "Close datalevin `conn`, then drop the store's entry from datalevin.db's
+   process-global read-cache map once the underlying store reports closed.
+   A store still shared by another live conn on the same directory keeps its
+   cache. Never throws; returns nil."
+  [conn]
+  (let [st (rescue nil (.-store ^DB @conn))]
+    (rescue nil (dtlv/close conn))
+    (when (and st (rescue false (dtlv-i/closed? st)))
+      (rescue nil (dtlv-db/remove-cache st)))
+    nil))
+
 (defrecord DatalevinStore [conn-init db-path base-schema extra-schema
                            value-type-map recovery-policy cache-limit
                            conn-opts]
@@ -164,14 +179,14 @@
     ;; NON-DESTRUCTIVE — close and reopen the SAME on-disk DB.
     (log/info "Reopening Datalevin KG store (non-destructive)" {:path db-path})
     (when-let [c (ci/snapshot conn-init)]
-      (rescue nil (dtlv/close c)))
+      (close-conn! c))
     (ci/clear! conn-init)
     (kg/ensure-conn! this))
 
   (close! [_this]
     (when-let [c (ci/snapshot conn-init)]
       (log/info "Closing Datalevin KG store" {:path db-path})
-      (rescue nil (dtlv/close c))
+      (close-conn! c)
       (ci/clear! conn-init)))
 
   kg/IPersistentKGStore
@@ -189,7 +204,7 @@
                 :db-path db-path
                 :stacktrace (mapv str (.getStackTrace (Throwable.)))})
     (when-let [c (ci/snapshot conn-init)]
-      (rescue nil (dtlv/close c)))
+      (close-conn! c))
     (let [dir (io/file db-path)]
       (when (.exists dir)
         (doseq [f (reverse (file-seq dir))]
