@@ -47,10 +47,28 @@
   (when msg
     (boolean (some #(str/includes? msg %) signatures))))
 
-(defn classify-open-failure
-  "Classify a Throwable raised by an LMDB-level open. Returns one of
-   `:wal-corrupt`, `:lock-contention`, `:version-mismatch`, `:unknown`.
-   Walks the cause chain so a wrapping exception still classifies correctly."
+(def ^:private not-corruption-signatures
+  "Substrings of failures raised BEFORE the store file is read, so they say
+   nothing about the store's content. `Shutdown in progress` is what
+   `Runtime.addShutdownHook` throws once JVM shutdown has begun (datalevin's
+   native open registers a hook). Such a failure is never healed: no retry,
+   no recovery rung."
+  ["Shutdown in progress"])
+
+(defn- not-corruption-failure?
+  "True when any Throwable in `ex`'s cause chain carries a
+   `not-corruption-signatures` message."
+  [^Throwable ex]
+  (loop [t ex]
+    (cond
+      (nil? t) false
+      (match-any? (some-> t .getMessage str) not-corruption-signatures) true
+      :else (recur (.getCause t)))))
+
+(defn- classify-store-failure
+  "Cause-chain walk over the store-content signatures: corrupt, version, lock.
+   Returns `:wal-corrupt`, `:version-mismatch`, `:lock-contention` or
+   `:unknown`."
   [^Throwable ex]
   (loop [t ex]
     (let [msg (some-> t .getMessage str)]
@@ -60,6 +78,20 @@
         (match-any? msg lock-signatures)       :lock-contention
         (and t (.getCause t))                  (recur (.getCause t))
         :else                                  :unknown))))
+
+(defn classify-open-failure
+  "Classify a Throwable raised by an LMDB-level open. Returns one of
+   `:wal-corrupt`, `:lock-contention`, `:version-mismatch`, `:unknown`.
+   Walks the cause chain so a wrapping exception still classifies correctly.
+
+   A failure raised before the store file is read (JVM shutdown refusing
+   datalevin's shutdown hook: `Shutdown in progress`) classifies
+   `:not-corruption`, ahead of every other class: it says nothing about the
+   store's content and must never feed a recovery rung."
+  [^Throwable ex]
+  (if (not-corruption-failure? ex)
+    :not-corruption
+    (classify-store-failure ex)))
 
 (def ^:private dead-conn-signatures
   "Substrings indicating a CLOSED (not corrupt) conn/env: the store's cached
@@ -89,6 +121,20 @@
 ;; -----------------------------------------------------------------------------
 ;; Quarantine — IO
 ;; -----------------------------------------------------------------------------
+
+(defn jvm-shutting-down?
+  "True once JVM shutdown has begun. Probes by registering and removing a
+   no-op shutdown hook: `Runtime.addShutdownHook` throws IllegalStateException
+   after shutdown starts, which is the same refusal that makes a datalevin
+   open fail with `Shutdown in progress`. Never throws."
+  []
+  (let [rt   (Runtime/getRuntime)
+        hook (Thread. ^Runnable (fn []))]
+    (try
+      (.addShutdownHook rt hook)
+      (.removeShutdownHook rt hook)
+      false
+      (catch IllegalStateException _ true))))
 
 (defn quarantine-path
   "Derive the quarantine path for `db-path`. Deterministic given a timestamp;
@@ -206,11 +252,17 @@
 
 (defn- emit!
   "Best-effort dispatch into the host event bus. Late-resolves + rescue-wrapped
-   so a missing handler is non-fatal and there is no compile-time event dep."
+   so a missing handler is non-fatal and there is no compile-time event dep.
+
+   Dispatches only when the host has a handler registered for `event-type`:
+   an unhandled event is dropped here rather than printing the bus's
+   `no handler for event` warning on every open failure."
   [event-type payload]
   (rescue nil
-    (when-let [dispatch (requiring-resolve 'hive-mcp.events.core/dispatch)]
-      (dispatch [event-type payload]))))
+    (let [dispatch    (requiring-resolve 'hive-mcp.events.core/dispatch)
+          registered? (requiring-resolve 'hive-mcp.events.core/handler-registered?)]
+      (when (and dispatch registered? (registered? event-type))
+        (dispatch [event-type payload])))))
 
 ;; -----------------------------------------------------------------------------
 ;; Policy dispatch
@@ -315,11 +367,20 @@
 ;; Public composition
 ;; -----------------------------------------------------------------------------
 
+(def healable-classifications
+  "Classifications positively identified from the failure itself. Only these
+   may reach a recovery rung (`:truncate`, `:quarantine`, a strategy fn) or a
+   retry. `:unknown` and `:not-corruption` are absent on purpose: a failure we
+   cannot name, or one raised before the store was read, must never mutate a
+   store that may be healthy (Never-NUKE-Data, axiom 20260428102603-3c7a5aff)."
+  #{:wal-corrupt :lock-contention :version-mismatch})
+
 (defn retryable-classification?
   "True when an open failure of `classification` may be re-attempted. An
-   `:unknown` failure never is, whatever the policy answers."
+   `:unknown` failure never is, whatever the policy answers; neither is a
+   `:not-corruption` failure (JVM shutdown), which no rung can fix."
   [classification]
-  (not= :unknown classification))
+  (contains? healable-classifications classification))
 
 (defn- retry-outcome
   "Final retry decision: the strategy's `outcome`, forced to `:abort` when
@@ -329,11 +390,28 @@
     :retry
     :abort))
 
+(defn- refuse-recovery
+  "Outcome for a classification no rung may touch: emit one
+   `:storage/open-failed` and abort without running the strategy."
+  [strategy classification db-path ^Throwable ex]
+  (emit! :storage/open-failed
+         {:db-path db-path
+          :classification classification
+          :strategy strategy
+          :note "classification not healable; no recovery rung ran"
+          :message (.getMessage ex)})
+  :abort)
+
 (defn heal-and-open!
   "Attempt `(open-fn)`. On failure, classify, apply policy, retry up to
    `:max-attempts` total attempts. A failure classified `:unknown` is never
    retried: the thrown ex-data carries `:retryable? false`. Returns the conn value or rethrows the last
    exception with `:classification` in its `ex-data`.
+
+   Only a classification in `healable-classifications` reaches the policy at
+   all. `:unknown` and `:not-corruption` (e.g. `Shutdown in progress`) abort
+   on the first failure with zero recovery rungs run, so neither can ever walk
+   a ladder into `:truncate` or `:quarantine`.
 
    `policy` — see `default-policy`:
      :strategy     keyword | [keyword ...] from #{:throw :audit :truncate :quarantine}
@@ -358,17 +436,20 @@
           (if-let [conn (:ok result)]
             conn
             (let [ex (:ex result)
-                  classification (classify-open-failure ex)]
+                  classification (classify-open-failure ex)
+                  healable? (retryable-classification? classification)]
               (log/warn ex "[storage/recovery] Open attempt"
                         attempt "of" max-attempts "failed"
                         {:db-path db-path :classification classification})
-              (case (retry-outcome (apply-strategy strategy classification db-path ex)
-                                   classification)
+              (case (if healable?
+                      (retry-outcome (apply-strategy strategy classification db-path ex)
+                                     classification)
+                      (refuse-recovery strategy classification db-path ex))
                 :retry  (recur (inc attempt) ex)
                 :abort  (throw (ex-info "Datalevin open failed and policy aborted retry"
                                         {:db-path db-path
                                          :classification classification
                                          :strategy strategy
-                                         :retryable? (retryable-classification? classification)
+                                         :retryable? healable?
                                          :err :storage/open-aborted}
                                         ex))))))))))

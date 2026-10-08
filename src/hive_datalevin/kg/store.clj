@@ -65,6 +65,18 @@
    {}
    ds-schema))
 
+(defn- refuse-open-during-shutdown!
+  "Throw before anything touches disk when `shutting-down?` (a 0-arg port,
+   default `recovery/jvm-shutting-down?`) answers true. Once JVM shutdown has
+   begun an open can only fail, and a failed open must never feed recovery."
+  [shutting-down? db-path]
+  (when ((or shutting-down? rec/jvm-shutting-down?))
+    (throw (ex-info "Refusing to open Datalevin store: JVM shutdown in progress"
+                    {:db-path db-path
+                     :classification :not-corruption
+                     :retryable? false
+                     :err :storage/shutdown-in-progress}))))
+
 (defn- validate-db-path!
   "Validate `db-path` is non-empty and ensure its parent directory exists."
   [db-path]
@@ -85,9 +97,15 @@
    `conn-opts` is forwarded verbatim to `datalevin.core/get-conn` after the
    host-level keys (`:cache-limit`), so a caller can set any datalevin db
    option (`:background-sampling?`, `:kv-opts`, ...) without this namespace
-   naming each one."
+   naming each one.
+
+   Two optional ports ride on the store map: `:shutting-down?` (0-arg, default
+   `recovery/jvm-shutting-down?`) is asked first, and a true answer refuses the
+   open before the db-path is touched; `:opener` (`(fn [db-path schema opts])`,
+   default `datalevin.core/get-conn`) performs the open."
   [{:keys [db-path base-schema extra-schema value-type-map
-           recovery-policy cache-limit conn-opts]}]
+           recovery-policy cache-limit conn-opts shutting-down? opener]}]
+  (refuse-open-during-shutdown! shutting-down? db-path)
   (log/info "Initializing Datalevin KG store"
             {:path db-path
              :recovery-strategy (:strategy recovery-policy)})
@@ -98,7 +116,8 @@
                         (merge base (translate-schema extra-schema vtm))
                         base)
         conn-opts*    (cond-> (or conn-opts {})
-                        (some? cache-limit) (assoc :cache-limit cache-limit))]
+                        (some? cache-limit) (assoc :cache-limit cache-limit))
+        open          (or opener dtlv/get-conn)]
     (log/debug "Datalevin schema translated"
                {:attributes (count merged-schema)
                 :extra-attributes (when extra-schema (count extra-schema))
@@ -106,7 +125,7 @@
                 :conn-opts conn-opts*})
     (rec/heal-and-open!
      {:policy recovery-policy :db-path db-path}
-     #(dtlv/get-conn db-path merged-schema conn-opts*))))
+     #(open db-path merged-schema conn-opts*))))
 
 (defn- close-conn!
   "Close datalevin `conn`, then drop the store's entry from datalevin.db's
@@ -236,11 +255,15 @@
      :recovery-policy forwarded to `recovery/heal-and-open!`
                       {:strategy :throw|:audit|:truncate|:quarantine|[..]
                        :max-attempts pos-int}
+     :shutting-down?  optional 0-arg port; when it answers true, ensure-conn!
+                      refuses to open (default `recovery/jvm-shutting-down?`)
+     :opener          optional open port `(fn [db-path schema conn-opts])`
+                      (default `datalevin.core/get-conn`)
 
    Config/schema resolution is the host's responsibility — this fn does not read
    env or config.edn. Returns nil on construction failure (rescue-wrapped)."
   [& [{:keys [db-path base-schema extra-schema value-type-map
-              recovery-policy cache-limit conn-opts]}]]
+              recovery-policy cache-limit conn-opts shutting-down? opener]}]]
   (rescue nil
           (do
             (log/info "Creating Datalevin graph store"
@@ -249,11 +272,13 @@
                        :cache-limit cache-limit
                        :conn-opts conn-opts
                        :recovery-strategy (:strategy recovery-policy)})
-            (map->DatalevinStore {:conn-init       (ci/atom-conn-init)
-                                  :db-path         db-path
-                                  :base-schema     base-schema
-                                  :extra-schema    extra-schema
-                                  :value-type-map  value-type-map
-                                  :recovery-policy recovery-policy
-                                  :cache-limit     cache-limit
-                                  :conn-opts       conn-opts}))))
+            (map->DatalevinStore (cond-> {:conn-init       (ci/atom-conn-init)
+                                          :db-path         db-path
+                                          :base-schema     base-schema
+                                          :extra-schema    extra-schema
+                                          :value-type-map  value-type-map
+                                          :recovery-policy recovery-policy
+                                          :cache-limit     cache-limit
+                                          :conn-opts       conn-opts}
+                                   shutting-down? (assoc :shutting-down? shutting-down?)
+                                   opener         (assoc :opener opener))))))
