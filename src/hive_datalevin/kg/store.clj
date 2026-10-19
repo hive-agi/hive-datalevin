@@ -32,6 +32,11 @@
    :kg-edge/schema-head    :db.type/string
    :kg-edge/schema-subject :db.type/string
 
+   ;; Sealed KG edges (the host's sealed-edge schema): one ciphertext row per
+   ;; sealed edge, one SHA-256 hex tombstone per deleted entry id.
+   :kg-sealed/blob      :db.type/string
+   :kg-sealed/tombstone :db.type/string
+
    :knowledge/abstraction-level :db.type/long
    :knowledge/grounded-at       :db.type/instant
    :knowledge/grounded-from     :db.type/string
