@@ -24,28 +24,30 @@
 ;; The engine behaviour the guard exists for
 ;; =============================================================================
 
-(deftest value-match-cliff-is-where-we-think-it-is-test
+;; Datalevin <= 1.1 had an LMDB key cliff: strings past 497 chars were stored
+;; and pullable but unmatchable by value and unfindable as a unique identity.
+;; Re-measured 2026-10-20 on datalevin 1.2.5: values up to 1,000,000 chars
+;; match by value and long unique identities resolve. These characterization
+;; tests pin that; if they fail, the engine regressed to a key cliff and the
+;; audit below is load-bearing again: re-measure safe-value-length.
+
+(deftest long-values-match-by-value-test
   (with-conn
     (fn [conn]
-      (doseq [n [100 lk/safe-value-length]]
-        (dl/transact! conn [{:n/id (str "ok" n) :n/text (body n)}]))
-      (doseq [n [(inc lk/safe-value-length) 1000 8000]]
-        (dl/transact! conn [{:n/id (str "big" n) :n/text (body n)}]))
+      (doseq [n [100 lk/safe-value-length (inc lk/safe-value-length) 1000 8000]]
+        (dl/transact! conn [{:n/id (str "v" n) :n/text (body n)}]))
       (let [db      (dl/db conn)
             match   (fn [n] (some? (dl/q '[:find ?e . :in $ ?v :where [?e :n/text ?v]] db (body n))))
             pullable (fn [n id] (= n (count (dl/q '[:find ?t . :in $ ?id
                                                     :where [?e :n/id ?id] [?e :n/text ?t]] db id))))]
-        (testing "at or below the safe length, a value matches by value"
-          (is (match 100))
-          (is (match lk/safe-value-length)))
-        (testing "past it, the SAME value is stored and pullable but unmatchable"
-          (doseq [n [(inc lk/safe-value-length) 1000 8000]]
-            (is (pullable n (str "big" n)) (str n " chars must still round-trip"))
-            (is (not (match n))
-                (str n " chars unexpectedly matched — datalevin may have raised the"
-                     " key limit; re-measure safe-value-length"))))))))
+        (testing "every length round-trips and matches by value"
+          (doseq [n [100 lk/safe-value-length (inc lk/safe-value-length) 1000 8000]]
+            (is (pullable n (str "v" n)) (str n " chars must round-trip"))
+            (is (match n)
+                (str n " chars did not match by value; datalevin has a key"
+                     " cliff again, re-measure safe-value-length"))))))))
 
-(deftest unique-identity-past-the-limit-is-unfindable-test
+(deftest unique-identity-past-the-old-limit-is-findable-test
   (with-conn
     (fn [conn]
       (let [short-id (body 100)
@@ -55,8 +57,8 @@
         (let [db (dl/db conn)
               found (fn [id] (some? (dl/q '[:find ?e . :in $ ?id :where [?e :n/id ?id]] db id)))]
           (is (found short-id))
-          (is (not (found long-id))
-              "a unique-identity string past the limit cannot be looked up by its own identity"))))))
+          (is (found long-id)
+              "a unique-identity string past the old limit is found by its own identity"))))))
 
 ;; =============================================================================
 ;; The guard
