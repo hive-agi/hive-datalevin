@@ -2,13 +2,13 @@
  :deps {org.clojure/clojure {:mvn/version "1.12.6"}
 
         ;; datalevin — LMDB-backed Datalog store (published, no fork).
-        datalevin/datalevin {:mvn/version "1.1.0"}
+        datalevin/datalevin {:mvn/version "1.2.5"}
 
         ;; hive-spi — IKGStore / IConnInit protocol contracts (pure leaf).
-        io.github.hive-agi/hive-spi {:mvn/version "1.4.4"}
+        io.github.hive-agi/hive-spi {:mvn/version "1.4.9"}
 
         ;; hive-dsl — Result/rescue DSL.
-        io.github.hive-agi/hive-dsl {:mvn/version "0.5.36"}
+        io.github.hive-agi/hive-dsl {:mvn/version "0.5.37"}
 
         com.taoensso/timbre {:mvn/version "6.8.0"}}
 
