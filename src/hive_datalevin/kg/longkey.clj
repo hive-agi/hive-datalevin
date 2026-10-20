@@ -27,7 +27,9 @@
 (def ^:const safe-value-length
   "Longest string that is still matchable by value. Measured 2026-08-20 on
    datalevin 0.10.18 by bisection: 497 matches, 498 does not. Independent of
-   the attribute's name length — the key carries an integer attribute id."
+   the attribute's name length — the key carries an integer attribute id.
+   Re-measured 2026-10-20 on datalevin 1.2.5: no cliff (1,000,000 chars match),
+   so the audit is conservative there; kept for stores on older engines."
   497)
 
 (defn value-safe?
