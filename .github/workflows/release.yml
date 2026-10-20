@@ -26,6 +26,16 @@ jobs:
         with:
           fetch-depth: 0
 
+      # datalevin 1.1.0 ships class files built for Java 21 (version 65).
+      # ubuntu-latest's default JDK is 17, so without this step 'Run tests'
+      # dies with UnsupportedClassVersionError before any test runs. Same
+      # JDK as staging-gate.yml, which is why the gate was green while the
+      # release stayed red.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
       - uses: DeLaGuardo/setup-clojure@13.0
         with:
           cli: latest
