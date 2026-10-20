@@ -17,7 +17,7 @@
          :extra-deps  {io.github.cognitect-labs/test-runner
                        {:git/tag "v0.5.1" :git/sha "dfb30dd"}
                        ;; stateful Machine check for the conn-lifecycle contract
-                       io.github.hive-agi/hive-test {:mvn/version "0.4.11"}}
+                       io.github.hive-agi/hive-test {:mvn/version "0.5.0"}}
          :main-opts ["-m" "cognitect.test-runner"]
          :exec-fn cognitect.test-runner.api/test}
 
