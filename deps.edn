@@ -5,7 +5,7 @@
         datalevin/datalevin {:mvn/version "1.2.7"}
 
         ;; hive-spi — IKGStore / IConnInit protocol contracts (pure leaf).
-        io.github.hive-agi/hive-spi {:mvn/version "1.4.14"}
+        io.github.hive-agi/hive-spi {:mvn/version "1.4.18"}
 
         ;; hive-dsl — Result/rescue DSL.
         io.github.hive-agi/hive-dsl {:mvn/version "0.6.2"}
@@ -23,5 +23,5 @@
 
   ;; Clojars publishing. version = the repo's VERSION file.
   :build
-  {:deps {io.github.hive-agi/hive-build {:mvn/version "0.2.1"}}
+  {:deps {io.github.hive-agi/hive-build {:mvn/version "0.3.1"}}
    :ns-default hive-build.api}}}
